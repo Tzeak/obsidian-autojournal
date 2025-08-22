@@ -294,11 +294,16 @@ export class MessageProcessor {
     const dateStr = this.getDateString(journalDate);
 
     // Generate heading using template or fallback to default
-    const heading = headingTemplate
-      ? this.generateHeading(headingTemplate, journalDate)
-      : `# Daily Journal - ${dateStr}`;
+    const heading =
+      headingTemplate && headingTemplate.trim()
+        ? this.generateHeading(headingTemplate, journalDate)
+        : headingTemplate === "" ||
+          headingTemplate === null ||
+          headingTemplate === undefined
+        ? "" // No heading if explicitly empty
+        : `# Daily Journal - ${dateStr}`; // Default heading if not provided
 
-    let summary = `${heading}\n\n`;
+    let summary = heading ? `${heading}\n\n` : "";
     summary += `Generated on ${new Date().toLocaleString()}\n`;
     if (llmInfo) {
       summary += `Digital Summaries: ${llmInfo}\n`;

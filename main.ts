@@ -399,12 +399,8 @@ export default class AutoJournalPlugin extends Plugin {
         ? `OpenAI ${this.settings.openAIModel}`
         : `Ollama ${this.settings.ollamaModel}`;
 
-      // Get the target date for the journal (should match the export date)
-      const targetDate = this.lastExportStartDate
-        ? this.messageProcessor.getTargetDateForJournal(
-            this.lastExportStartDate
-          )
-        : new Date();
+      // Use today's date for the journal filename (not the export date)
+      const targetDate = new Date();
 
       console.log(
         `Journal target date: ${this.messageProcessor.getDateString(
