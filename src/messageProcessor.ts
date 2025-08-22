@@ -306,7 +306,7 @@ export class MessageProcessor {
     let summary = heading ? `${heading}\n\n` : "";
     summary += `Generated on ${new Date().toLocaleString()}\n`;
     if (llmInfo) {
-      summary += `Digital Summaries: ${llmInfo}\n`;
+      summary += `Generated with: ${llmInfo}\n`;
     }
     summary += "\n";
 
@@ -314,9 +314,6 @@ export class MessageProcessor {
       summary += "No conversations found for this day.\n";
       return summary;
     }
-
-    summary += `## Conversations Summary\n\n`;
-    summary += `Total conversations: ${summaries.length}\n\n`;
 
     for (const item of summaries) {
       summary += `### ${item.filename}\n\n`;
