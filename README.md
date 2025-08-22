@@ -1,4 +1,5 @@
 # Auto Journal - Obsidian Plugin
+## This Readme is written by a robot. leaving for use with other robots.
 
 Automatically import and summarize iMessage conversations as journal entries in Obsidian.
 
