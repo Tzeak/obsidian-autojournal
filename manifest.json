@@ -1,0 +1,11 @@
+{
+  "id": "auto-journal",
+  "name": "Auto Journal",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Automatically import and summarize iMessage conversations as journal entries",
+  "author": "Auto Journal Team",
+  "authorUrl": "",
+  "fundingUrl": "",
+  "isDesktopOnly": true
+}
