@@ -4,12 +4,15 @@ import { ContactManager } from "./src/contactManager";
 import { MessageProcessor } from "./src/messageProcessor";
 import { AISummarizer } from "./src/aiSummarizer";
 import { AutoJournalSettingsTab } from "./src/settingsTab";
+import { DateRangeModal, DateRangeResult } from "./src/dateRangeModal";
+import { CommandExecutor } from "./src/commandExecutor";
 
 export default class AutoJournalPlugin extends Plugin {
   settings: AutoJournalSettings;
   contactManager: ContactManager;
   messageProcessor: MessageProcessor;
   aiSummarizer: AISummarizer;
+  commandExecutor: CommandExecutor;
   autoImportInterval: number | null = null;
   lastExportDateDir: string | null = null;
   lastExportStartDate: string | null = null;
@@ -22,15 +25,16 @@ export default class AutoJournalPlugin extends Plugin {
     this.contactManager = new ContactManager();
     this.messageProcessor = new MessageProcessor(this.contactManager);
     this.aiSummarizer = new AISummarizer(this.settings);
+    this.commandExecutor = new CommandExecutor();
 
     // Load contacts if path is configured
     if (this.settings.contactsPath) {
       await this.loadContacts();
     }
 
-    // Add ribbon icon
-    this.addRibbonIcon("calendar-days", "Import Messages", () => {
-      this.importYesterdayMessages();
+    // Add ribbon icon - opens date picker for flexible date selection
+    this.addRibbonIcon("calendar-days", "Export iMessages", () => {
+      this.showDatePickerAndExport();
     });
 
     // Add commands
@@ -44,6 +48,12 @@ export default class AutoJournalPlugin extends Plugin {
       id: "import-custom-date-messages",
       name: "Import Messages for Custom Date",
       callback: () => this.importCustomDateMessages(),
+    });
+
+    this.addCommand({
+      id: "export-with-date-picker",
+      name: "Export iMessages (Date Picker)",
+      callback: () => this.showDatePickerAndExport(),
     });
 
     this.addCommand({
@@ -198,17 +208,8 @@ export default class AutoJournalPlugin extends Plugin {
   }
 
   async importCustomDateMessages() {
-    // Create a modal for date input
-    const dateInput = await this.promptForDate();
-    if (!dateInput) return;
-
-    const endDate = new Date(dateInput);
-    endDate.setDate(endDate.getDate() + 1);
-
-    await this.importMessages(
-      dateInput,
-      this.messageProcessor.getDateString(endDate)
-    );
+    // Use the date picker modal
+    await this.showDatePickerAndExport();
   }
 
   async importMessages(startDate: string, endDate: string) {
@@ -239,36 +240,19 @@ export default class AutoJournalPlugin extends Plugin {
       );
       console.log(`Directory name: ${dateDir}`);
 
-      // Try to get the vault's absolute path
-      let vaultPath = "";
-      try {
-        // Try different methods to get the vault path using type assertions
-        const adapter = this.app.vault.adapter as any;
-        if (adapter.getFullPath) {
-          vaultPath = adapter.getFullPath("");
-        } else if (adapter.getResourcePath) {
-          vaultPath = adapter.getResourcePath("");
-        } else if (adapter.getBasePath) {
-          vaultPath = adapter.getBasePath();
-        } else if (adapter.basePath) {
-          vaultPath = adapter.basePath;
-        }
-      } catch (e) {
-        console.log("Could not get vault path automatically");
+      // Get the vault's absolute path
+      const vaultPath = this.getVaultPath();
+
+      if (!vaultPath) {
+        new Notice(
+          "Could not determine vault path. Please run the export manually.",
+          8000
+        );
+        return;
       }
 
       // Use the configured output path for exports
-      const exportPath = vaultPath
-        ? `${vaultPath}/${this.settings.outputPath}/${dateDir}`
-        : `${this.settings.outputPath}/${dateDir}`;
-      const exportCommand = `${this.settings.imessageExporterPath} -f txt -o "${exportPath}" -s "${startDate}" -e "${endDate}" -a macOS`;
-
-      // Copy command to clipboard
-      await navigator.clipboard.writeText(exportCommand);
-      new Notice(
-        "Command copied to clipboard! Run it in terminal from anywhere, then click 'Process Exported Files'",
-        8000
-      );
+      const exportPath = `${vaultPath}/${this.settings.outputPath}/${dateDir}`;
 
       // Store the date directory for later processing
       this.lastExportDateDir = dateDir;
@@ -278,16 +262,94 @@ export default class AutoJournalPlugin extends Plugin {
       console.log(
         `Export date info: startDate=${startDate}, endDate=${endDate}, dateDir=${dateDir}`
       );
-      console.log(
-        `Date explanation: Exporting messages from ${startDate} (inclusive) to ${endDate} (exclusive), storing in directory ${dateDir}`
+      console.log(`Export path: ${exportPath}`);
+
+      // Execute the iMessage exporter directly
+      new Notice("Running iMessage exporter... This may take a moment.", 5000);
+
+      const result = await this.commandExecutor.executeImessageExporter(
+        this.settings.imessageExporterPath,
+        exportPath,
+        startDate,
+        endDate,
+        (message) => new Notice(message, 3000)
       );
 
-      // Show instructions for next steps
-      this.showExportInstructions(dateDir);
+      if (result.success) {
+        new Notice(
+          "iMessage export completed! Processing files...",
+          3000
+        );
+        // Automatically process the exported files
+        // Wait a moment for the file system to catch up
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await this.processExportedFiles();
+      } else {
+        console.error("Export failed:", result.error);
+        new Notice(
+          `Export failed: ${result.error || "Unknown error"}. Check console for details.`,
+          8000
+        );
+        
+        // Fallback: copy command to clipboard
+        const exportCommand = `${this.settings.imessageExporterPath} -f txt -o "${exportPath}" -s "${startDate}" -e "${endDate}" -a macOS`;
+        await navigator.clipboard.writeText(exportCommand);
+        new Notice(
+          "Command copied to clipboard as fallback. You can run it manually in terminal.",
+          5000
+        );
+      }
     } catch (error) {
       console.error("Error importing messages:", error);
       new Notice("Failed to import messages");
     }
+  }
+
+  /**
+   * Show the date picker modal and export messages for selected dates
+   */
+  async showDatePickerAndExport() {
+    new DateRangeModal(this.app, async (result: DateRangeResult | null) => {
+      if (!result) {
+        // User cancelled
+        return;
+      }
+
+      // The exporter uses exclusive end dates, so we need to add one day
+      // Parse the date explicitly to avoid timezone issues
+      const [year, month, day] = result.endDate.split("-").map(Number);
+      const endDate = new Date(year, month - 1, day); // month is 0-indexed
+      endDate.setDate(endDate.getDate() + 1);
+      const exportEndDate = this.messageProcessor.getDateString(endDate);
+
+      console.log(
+        `Date picker selection: ${result.startDate} to ${result.endDate} (single: ${result.singleDate})`
+      );
+      console.log(`Export date range: ${result.startDate} to ${exportEndDate}`);
+
+      await this.importMessages(result.startDate, exportEndDate);
+    }).open();
+  }
+
+  /**
+   * Get the absolute path to the vault
+   */
+  private getVaultPath(): string {
+    try {
+      const adapter = this.app.vault.adapter as any;
+      if (adapter.getFullPath) {
+        return adapter.getFullPath("");
+      } else if (adapter.getResourcePath) {
+        return adapter.getResourcePath("");
+      } else if (adapter.getBasePath) {
+        return adapter.getBasePath();
+      } else if (adapter.basePath) {
+        return adapter.basePath;
+      }
+    } catch (e) {
+      console.log("Could not get vault path automatically:", e);
+    }
+    return "";
   }
 
   async processExistingMessages() {
@@ -450,38 +512,6 @@ export default class AutoJournalPlugin extends Plugin {
       console.error("Error processing message content:", error);
       new Notice(`Failed to process messages: ${error.message}`);
     }
-  }
-
-  private showExportInstructions(dateDir: string) {
-    const instructions = `
-Export Instructions:
-
-1. ✅ Command copied to clipboard - paste it in terminal and run it from anywhere
-2. The export will create files directly in your vault at: ${this.settings.outputPath}/${dateDir}/
-3. Run "Auto Journal: Process Exported Files" command to create your daily summary
-
-The plugin will automatically:
-- Replace phone numbers with contact names
-- Generate AI summaries of conversations
-- Create a daily journal entry in your output folder
-		`;
-
-    console.log(instructions);
-    new Notice("Check console for next steps", 8000);
-  }
-
-  private async promptForDate(): Promise<string | null> {
-    // Simple prompt - in a full implementation you'd create a proper modal
-    const date = prompt("Enter date (YYYY-MM-DD):");
-    if (!date) return null;
-
-    // Basic validation
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      new Notice("Invalid date format. Use YYYY-MM-DD");
-      return null;
-    }
-
-    return date;
   }
 
   startAutoImport() {
